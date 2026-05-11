@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { VegaEmbed } from 'react-vega';
 import PlayerSearch from './components/PlayerSearch';
 import { ValorantPlayer } from './types/pandascore';
@@ -20,6 +20,23 @@ interface PlayerStats {
   rounds: number;
   form: number[];
   agents: { agent: string; pickRate: number; rating: number }[];
+}
+
+interface RecentMatch {
+  id: number;
+  name: string;
+  status: string;
+  beginAt: string | null;
+  league: string;
+  serie: string;
+  opponents: string[];
+}
+
+interface PlayerInsights {
+  stats: PlayerStats;
+  statsSource: 'pandascore' | 'modeled';
+  statsUnavailableReason: string;
+  matches: RecentMatch[];
 }
 
 const statLabels: Record<StatKey, string> = {
@@ -104,6 +121,11 @@ function playerInitial(player: ValorantPlayer) {
 function formatStat(key: StatKey, value: number) {
   if (key === 'kast' || key === 'headshot' || key === 'clutch') return `${value}%`;
   return value.toString();
+}
+
+function formatDate(value: string | null) {
+  if (!value) return 'TBD';
+  return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(value));
 }
 
 function PlayerPanel({
@@ -213,17 +235,58 @@ function StatRow({
   );
 }
 
+function usePlayerInsights(player: ValorantPlayer | null, timeframe: Timeframe) {
+  const [result, setResult] = useState<{
+    playerId: number;
+    timeframe: Timeframe;
+    insights: PlayerInsights;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!player) return;
+
+    const controller = new AbortController();
+
+    fetch(`/api/player-insights?playerId=${player.id}&timeframe=${timeframe}`, {
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error('Could not load player insights');
+        return response.json();
+      })
+      .then((data: PlayerInsights) => {
+        setResult({ playerId: player.id, timeframe, insights: data });
+      })
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        console.error(error);
+      });
+
+    return () => controller.abort();
+  }, [player, timeframe]);
+
+  const isCurrentResult = Boolean(result && result.playerId === player?.id && result.timeframe === timeframe);
+  const insights = isCurrentResult ? result?.insights || null : null;
+
+  return { insights, loading: Boolean(player) && !insights };
+}
+
 export default function ComparisonPage() {
   const [slotA, setSlotA] = useState<ValorantPlayer | null>(null);
   const [slotB, setSlotB] = useState<ValorantPlayer | null>(null);
   const [timeframe, setTimeframe] = useState<Timeframe>('recent');
-  const [activeView, setActiveView] = useState<'overview' | 'form' | 'agents'>('overview');
+  const [activeView, setActiveView] = useState<'overview' | 'form' | 'agents' | 'matches'>('overview');
 
-  const statsA = useMemo(() => createStats(slotA, timeframe, 'A'), [slotA, timeframe]);
-  const statsB = useMemo(() => createStats(slotB, timeframe, 'B'), [slotB, timeframe]);
+  const fallbackStatsA = useMemo(() => createStats(slotA, timeframe, 'A'), [slotA, timeframe]);
+  const fallbackStatsB = useMemo(() => createStats(slotB, timeframe, 'B'), [slotB, timeframe]);
+  const insightsA = usePlayerInsights(slotA, timeframe);
+  const insightsB = usePlayerInsights(slotB, timeframe);
+  const statsA = insightsA.insights?.stats || fallbackStatsA;
+  const statsB = insightsB.insights?.stats || fallbackStatsB;
   const hasBothPlayers = Boolean(slotA && slotB);
   const leftName = playerDisplayName(slotA, 'Player A');
   const rightName = playerDisplayName(slotB, 'Player B');
+  const loadingInsights = insightsA.loading || insightsB.loading;
 
   const overviewData = (Object.keys(statLabels) as StatKey[]).flatMap((key) => [
     { stat: statLabels[key], player: leftName, value: statsA[key], score: (statsA[key] / statRanges[key]) * 100 },
@@ -290,13 +353,23 @@ export default function ComparisonPage() {
           </div>
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Status</p>
-            <p className="mt-2 text-2xl font-bold">{hasBothPlayers ? 'Ready' : 'Pick two'}</p>
-            <p className="text-sm text-zinc-400">comparison updates instantly</p>
+            <p className="mt-2 text-2xl font-bold">{loadingInsights ? 'Syncing' : hasBothPlayers ? 'Ready' : 'Pick two'}</p>
+            <p className="text-sm text-zinc-400">
+              {insightsA.insights?.statsSource === 'pandascore' || insightsB.insights?.statsSource === 'pandascore'
+                ? 'using PandaScore stats'
+                : 'modeled stats with live matches'}
+            </p>
           </div>
         </section>
 
+        {(insightsA.insights?.statsUnavailableReason || insightsB.insights?.statsUnavailableReason) && (
+          <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-100">
+            PandaScore player search and match context are live. Historical player stats are not enabled for this key, so performance charts are using a deterministic model until that API access is available.
+          </div>
+        )}
+
         <nav className="flex flex-wrap gap-2">
-          {(['overview', 'form', 'agents'] as const).map((view) => (
+          {(['overview', 'form', 'agents', 'matches'] as const).map((view) => (
             <button
               key={view}
               onClick={() => setActiveView(view)}
@@ -426,6 +499,47 @@ export default function ComparisonPage() {
                 config: { view: { stroke: null } },
               }}
             />
+          </section>
+        )}
+
+        {activeView === 'matches' && (
+          <section className="grid gap-4 lg:grid-cols-2">
+            {[
+              { name: leftName, matches: insightsA.insights?.matches || [], color: 'cyan' },
+              { name: rightName, matches: insightsB.insights?.matches || [], color: 'rose' },
+            ].map((group) => (
+              <div key={group.name} className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+                <div className="mb-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Recent matches</p>
+                  <h2 className="mt-1 text-lg font-semibold">{group.name}</h2>
+                </div>
+                {group.matches.length > 0 ? (
+                  <div className="grid gap-3">
+                    {group.matches.map((match) => (
+                      <article key={match.id} className="rounded-lg border border-zinc-800 bg-zinc-900 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate font-semibold text-white">{match.name}</p>
+                            <p className="mt-1 text-sm text-zinc-400">{match.league} · {match.serie}</p>
+                          </div>
+                          <span className="shrink-0 rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-300">
+                            {match.status}
+                          </span>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-400">
+                          <span>{formatDate(match.beginAt)}</span>
+                          {match.opponents.length > 0 && <span>{match.opponents.join(' vs ')}</span>}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="rounded-lg border border-zinc-800 bg-zinc-900 p-4 text-sm text-zinc-400">
+                    Select a player to load live PandaScore match context.
+                  </p>
+                )}
+              </div>
+            ))}
           </section>
         )}
       </div>
