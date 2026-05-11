@@ -6,10 +6,12 @@ export async function GET(request: Request) {
   const API_KEY = process.env.PANDASCORE_API_KEY;
 
   if (!query) return NextResponse.json([]);
+  if (!API_KEY) {
+    return NextResponse.json({ error: 'Missing PANDASCORE_API_KEY' }, { status: 500 });
+  }
 
-  // PandaScore "search" filter lets us find players by name
   const res = await fetch(
-    `https://api.pandascore.co/valorant/players?search[name]=${query}&per_page=5`,
+    `https://api.pandascore.co/valorant/players?search[name]=${encodeURIComponent(query)}&per_page=5`,
     {
       headers: {
         'Authorization': `Bearer ${API_KEY}`,
@@ -17,6 +19,10 @@ export async function GET(request: Request) {
       },
     }
   );
+
+  if (!res.ok) {
+    return NextResponse.json({ error: 'PandaScore search failed' }, { status: res.status });
+  }
 
   const data = await res.json();
   return NextResponse.json(data);
