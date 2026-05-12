@@ -34,7 +34,7 @@ interface RecentMatch {
 
 interface PlayerInsights {
   stats: PlayerStats;
-  statsSource: 'pandascore' | 'modeled';
+  statsSource: 'vlr' | 'modeled';
   statsUnavailableReason: string;
   matches: RecentMatch[];
 }
@@ -60,9 +60,9 @@ const statRanges: Record<StatKey, number> = {
 };
 
 const timeframes: { id: Timeframe; label: string; helper: string }[] = [
-  { id: 'recent', label: 'Recent', helper: 'last 10 maps' },
-  { id: 'season', label: 'Season', helper: '2026 sample' },
-  { id: 'career', label: 'Career', helper: 'weighted profile' },
+  { id: 'recent', label: '30D', helper: 'VLR recent' },
+  { id: 'season', label: '60D', helper: 'VLR default' },
+  { id: 'career', label: '90D', helper: 'extended form' },
 ];
 
 function seededValue(seed: number, index: number) {
@@ -355,16 +355,16 @@ export default function ComparisonPage() {
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Status</p>
             <p className="mt-2 text-2xl font-bold">{loadingInsights ? 'Syncing' : hasBothPlayers ? 'Ready' : 'Pick two'}</p>
             <p className="text-sm text-zinc-400">
-              {insightsA.insights?.statsSource === 'pandascore' || insightsB.insights?.statsSource === 'pandascore'
-                ? 'using PandaScore stats'
-                : 'modeled stats with live matches'}
+              {insightsA.insights?.statsSource === 'vlr' || insightsB.insights?.statsSource === 'vlr'
+                ? 'using VLR stats'
+                : 'waiting for VLR data'}
             </p>
           </div>
         </section>
 
         {(insightsA.insights?.statsUnavailableReason || insightsB.insights?.statsUnavailableReason) && (
           <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-100">
-            PandaScore player search and match context are live. Historical player stats are not enabled for this key, so performance charts are using a deterministic model until that API access is available.
+            VLR search and match context are live. This player was not found in the selected aggregate stats window, so charts are using a local fallback until another timeframe is selected.
           </div>
         )}
 
